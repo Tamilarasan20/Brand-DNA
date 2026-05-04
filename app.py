@@ -17,7 +17,6 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
-from pydantic import BaseModel
 
 load_dotenv()
 
@@ -25,10 +24,6 @@ from lora.scraper    import ScraperEngine
 from lora.enrichment import BrandEnricher
 
 app = FastAPI(title="Loraloop Scraper")
-
-
-class ScrapeImagesRequest(BaseModel):
-    url: str
 
 # ── HTML ───────────────────────────────────────────────────────────────────────
 
@@ -690,33 +685,6 @@ def scrape_only(url: str):
             data["snapshot_url"] = f"http://localhost:8000/snapshots/{filename}"
             
         return data
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
-@app.post("/scrape-images")
-def scrape_images(payload: ScrapeImagesRequest):
-    """Run the Python scraper and return image candidates for the knowledge base."""
-    raw_url = payload.url.strip()
-    if not raw_url:
-        return {"error": "URL is required"}
-
-    target = raw_url if raw_url.startswith(("http://", "https://")) else f"https://{raw_url}"
-
-    try:
-        scraper = ScraperEngine(enable_snapshot=False)
-        raw_data = scraper.scrape(target)
-        if raw_data.crawl_status.value == "failed":
-            return {"error": raw_data.error or "Scrape failed"}
-
-        images = raw_data.visual_assets.all_images or []
-        return {
-            "images": images,
-            "total": len(images),
-            "raw": len(images),
-            "logoUrl": raw_data.visual_assets.logo_url,
-            "ogImage": raw_data.visual_assets.og_image,
-        }
     except Exception as exc:
         return {"error": str(exc)}
 

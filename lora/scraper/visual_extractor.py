@@ -5,7 +5,6 @@ Extracts brand colors, fonts, and images from HTML + CSS.
 
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 from urllib.parse import urljoin
@@ -30,9 +29,6 @@ _CSS_VAR_COLOR_RE = re.compile(
     r'--[\w-]*color[\w-]*\s*:\s*(#[0-9a-fA-F]{3,8}|rgb[^;]+)',
     re.IGNORECASE,
 )
-_IMAGE_EXT_RE = re.compile(r'\.(?:jpe?g|png|webp|avif)(?:[?#][^\s"\'<>)]*)?$', re.IGNORECASE)
-_IMAGE_URL_RE = re.compile(r'https?://[^"\'\s<>)\\]+?\.(?:jpe?g|png|webp|avif)(?:[?#][^"\'\s<>)\\]*)?', re.IGNORECASE)
-_CSS_URL_RE = re.compile(r'url\((["\']?)(.*?)\1\)', re.IGNORECASE)
 
 def _is_useful_image(src: str) -> bool:
     if not src or len(src) < 10: return False
@@ -68,29 +64,10 @@ def _is_useful_image(src: str) -> bool:
     if w_param and int(w_param.group(1)) < 50: return False
 
     if lower.endswith(".ico"): return False
-    if re.search(r'\.(svg|gif|bmp|ico)(\?|$)', lower): return False
     if re.search(r'/(favicon|sprite)\b', lower, re.I): return False
     if re.search(r'/(icon|arrow|chevron|check|star|dot|close|menu|hamburger|button|btn)/', lower, re.I): return False
 
     return True
-
-def _pick_srcset_candidates(srcset: str) -> list[tuple[str, int]]:
-    candidates: list[tuple[str, int]] = []
-    for entry in srcset.split(","):
-        parts = entry.strip().split()
-        if not parts:
-            continue
-        score = 0
-        if len(parts) > 1:
-            descriptor = parts[1].lower()
-            if descriptor.endswith("w"):
-                try: score = int(float(descriptor[:-1]))
-                except ValueError: score = 0
-            elif descriptor.endswith("x"):
-                try: score = int(float(descriptor[:-1]) * 1000)
-                except ValueError: score = 0
-        candidates.append((parts[0], score))
-    return sorted(candidates, key=lambda item: item[1], reverse=True)
 
 def _normalize_image_url(src: str) -> str:
     from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
@@ -193,7 +170,7 @@ class VisualExtractor:
 
         colors     = self._extract_colors(html, css)
         typography = self._extract_typography(html, css)
-        images     = self._extract_images(soup, base_url, css)
+        images     = self._extract_images(soup, base_url)
         logo       = self._extract_logo(soup, base_url)
         favicon    = self._extract_favicon(soup, base_url)
         og_image   = self._get_og_image(soup)
@@ -203,8 +180,8 @@ class VisualExtractor:
             logo_url=logo,
             favicon_url=favicon,
             og_image=og_image,
-            hero_images=images[:5],
-            all_images=images[:80],
+            hero_images=images[:3],
+            all_images=images[:20],
             colors=colors,
             typography=typography,
             visual_style_hints=hints,
@@ -319,15 +296,10 @@ class VisualExtractor:
 
     # ── Image extraction ───────────────────────────────────────────────────────
 
-    def _extract_images(self, soup: BeautifulSoup, base_url: str, css: str = "") -> list[str]:
+    def _extract_images(self, soup: BeautifulSoup, base_url: str) -> list[str]:
         scored_images: dict[str, int] = {}
 
         def add(src: str | None, base_score: int = 0) -> None:
-            if not src:
-                return
-            src = src.strip()
-            if src.startswith("//"):
-                src = "https:" + src
             if src and not src.startswith("data:") and _is_useful_image(src):
                 full = urljoin(base_url, src)
                 norm = _normalize_image_url(full)
@@ -335,124 +307,32 @@ class VisualExtractor:
                 if norm not in scored_images or score > scored_images[norm]:
                     scored_images[norm] = score
 
-        def add_srcset(srcset: str | None, base_score: int = 0) -> None:
-            if not srcset:
-                return
-            for src, descriptor_score in _pick_srcset_candidates(srcset):
-                add(src, base_score + min(descriptor_score // 100, 25))
-
-        def add_from_css(css_text: str | None, base_score: int = 0) -> None:
-            if not css_text:
-                return
-            for match in _CSS_URL_RE.finditer(css_text):
-                add(match.group(2), base_score)
-
-        def walk_json(obj, base_score: int = 0) -> None:
-            if obj is None:
-                return
-            if isinstance(obj, str):
-                if _IMAGE_URL_RE.search(obj) or _IMAGE_EXT_RE.search(obj):
-                    add(obj, base_score)
-                return
-            if isinstance(obj, list):
-                for item in obj:
-                    walk_json(item, base_score)
-                return
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    key_score = 12 if str(key).lower() in {
-                        "image", "images", "logo", "photo", "thumbnail",
-                        "thumbnailurl", "contenturl", "src", "url",
-                        "featured_image", "featuredimage",
-                    } else 0
-                    walk_json(value, base_score + key_score)
-
         # Social preview images first (highest quality brand assets)
-        for prop in (
-            "og:image", "og:image:url", "og:image:secure_url",
-            "twitter:image", "twitter:image:src", "image",
-        ):
+        for prop in ("og:image", "twitter:image"):
             tag = soup.find("meta", attrs={"property": prop}) or \
-                  soup.find("meta", attrs={"name": prop}) or \
-                  soup.find("meta", attrs={"itemprop": prop})
+                  soup.find("meta", attrs={"name": prop})
             if tag:
                 add(tag.get("content"), base_score=50)
 
-        # Browser/CMS image hints.
-        for link in soup.find_all("link"):
-            rel = " ".join(link.get("rel") or []).lower()
-            if rel == "image_src" or (rel == "preload" and link.get("as") == "image"):
-                add(link.get("href"), base_score=35)
-                add_srcset(link.get("imagesrcset"), base_score=35)
-
         # <img> tags and <picture> sources
-        image_attrs = [
-            "src", "data-src", "data-lazy-src", "data-original", "data-lazy",
-            "data-image", "data-bg", "data-full", "data-hi-res", "data-url",
-            "data-img-src", "data-imgurl", "data-thumb", "data-large-file",
-            "data-orig-file", "data-medium-file", "data-full-url",
-            "data-natural-src", "data-zoom-image", "data-large",
-            "data-full-src", "data-retina-src", "data-original-src",
-            "data-full-size-url", "data-zoom-src", "data-swiper-lazy",
-            "data-flickity-lazyload", "data-lazy-load", "loading-src",
-        ]
         for img in soup.find_all("img"):
-            for attr in image_attrs:
-                add(img.get(attr))
-            add_srcset(img.get("srcset"), base_score=10)
-            add_srcset(img.get("data-srcset"), base_score=10)
+            src = (img.get("src") or img.get("data-src") or
+                   img.get("data-lazy-src") or img.get("data-original"))
+            add(src)
+            
+            # Check srcset for higher quality options
+            srcset = img.get("srcset") or img.get("data-srcset")
+            if srcset:
+                for entry in srcset.split(","):
+                    parts = entry.strip().split()
+                    if parts:
+                        add(parts[0], base_score=10) # slightly favor srcset variants
 
-        for source in soup.find_all(["source", "video"]):
-            add(source.get("src"))
-            add(source.get("poster"), base_score=15)
-            add_srcset(source.get("srcset"), base_score=10)
-
-        # Backgrounds and generic data attributes used by CMS galleries.
-        for el in soup.find_all(True):
-            add_from_css(el.get("style"), base_score=8)
-            for attr, value in el.attrs.items():
-                if not isinstance(value, str):
-                    continue
-                attr_lower = attr.lower()
-                if attr_lower in {
-                    "data-bg", "data-background", "data-background-image",
-                    "data-cover", "data-href", "data-full", "data-original",
-                    "data-large", "data-src", "data-url",
-                }:
-                    add(value, base_score=8)
-                    add_from_css(value, base_score=8)
-                elif value.startswith(("http://", "https://", "//")) and _IMAGE_EXT_RE.search(value):
-                    add(value, base_score=4)
-
-        # Noscript fallback markup often contains real lazy-loaded images.
-        for ns in soup.find_all("noscript"):
-            nested = BeautifulSoup(ns.get_text() or ns.decode_contents(), "html.parser")
-            for img in nested.find_all("img"):
-                for attr in image_attrs:
-                    add(img.get(attr), base_score=10)
-                add_srcset(img.get("srcset"), base_score=10)
-
-        # Structured data and hydration blobs from modern JS frameworks.
-        for script in soup.find_all("script"):
-            script_text = script.string or script.get_text() or ""
-            script_type = (script.get("type") or "").lower()
-            if script_type == "application/ld+json":
-                try:
-                    walk_json(json.loads(script_text), base_score=30)
-                except Exception:
-                    pass
-
-            if script.get("id") == "__NEXT_DATA__" or "__NUXT__" in script_text[:500] or "window.__INITIAL_STATE__" in script_text[:5000]:
-                try:
-                    walk_json(json.loads(script_text), base_score=12)
-                except Exception:
-                    pass
-
-            for match in _IMAGE_URL_RE.finditer(script_text[:250_000]):
-                add(match.group(0), base_score=6)
-
-        # External CSS background URLs collected earlier.
-        add_from_css(css, base_score=6)
+        # Also check background images
+        for el in soup.find_all(style=re.compile(r'background-image\s*:')):
+            m = re.search(r'url\((["\']?)([^)"\']+)\1\)', el.get("style", ""))
+            if m:
+                add(m.group(2))
 
         # Sort by score descending and return top ones (up to 200)
         sorted_images = sorted(scored_images.items(), key=lambda x: x[1], reverse=True)

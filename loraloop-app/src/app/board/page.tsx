@@ -766,11 +766,7 @@ function BoardContent() {
                   <p className="text-[13px] text-[#A1A1AA] mt-0.5">Images, logos, colors, typography, tagline, values, aesthetic, tone & overview</p>
                 </div>
               </div>
-              <BrandBoard
-                initialDna={dna}
-                businessId={businessId}
-                onDnaChange={setDna}
-              />
+              <BrandBoard initialDna={dna} />
             </div>
           )}
         </div>

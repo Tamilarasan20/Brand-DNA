@@ -651,10 +651,42 @@ def analyze(url: str):
         event_stream(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control":   "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
     )
+
+
+from fastapi.staticfiles import StaticFiles
+
+# Create snapshots dir if it doesn't exist
+import os
+os.makedirs("snapshots", exist_ok=True)
+app.mount("/snapshots", StaticFiles(directory="snapshots"), name="snapshots")
+
+@app.get("/scrape-only")
+def scrape_only(url: str):
+    """Run only the scraper engine and return RawWebsiteData JSON."""
+    if not url.startswith(("http://", "https://")):
+        target = "https://" + url
+    else:
+        target = url
+        
+    try:
+        scraper = ScraperEngine(enable_snapshot=True, snapshot_dir="snapshots")
+        raw_data = scraper.scrape(target)
+        if raw_data.crawl_status.value == "failed":
+            return {"error": raw_data.error}
+            
+        data = json.loads(raw_data.model_dump_json())
+        if raw_data.snapshot_path:
+            filename = os.path.basename(raw_data.snapshot_path)
+            data["snapshot_url"] = f"http://localhost:8000/snapshots/{filename}"
+            
+        return data
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

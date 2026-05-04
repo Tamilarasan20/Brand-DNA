@@ -30,6 +30,109 @@ _CSS_VAR_COLOR_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _is_useful_image(src: str) -> bool:
+    if not src or len(src) < 10: return False
+    if re.search(r'\s+\d+(\.\d+)?[wx]', src): return False
+    if re.search(r',\s*https?://', src): return False
+    if " " in src: return False
+
+    lower = src.lower()
+    hard_reject = [
+        "pixel", "track", "analytics", "beacon", "1x1", "spacer",
+        "facebook.com/tr", "google-analytics", "doubleclick",
+        "googletagmanager", "hotjar", "data:image/gif",
+        "data:image/svg+xml", "gravatar", "wp-emoji",
+        "wpcf7", "spinner", "loading.gif", "recaptcha",
+        "cloudflare", "captcha",
+    ]
+    if any(j in lower for j in hard_reject): return False
+
+    placeholders = [
+        "placeholder.com", "via.placeholder.com", "placeimg.com",
+        "placekitten.com", "dummyimage.com", "loremflickr.com",
+        "lorempixel.com", "imagefor.me", "placeholder.pics",
+        "picsum.photos",
+    ]
+    if any(p in lower for p in placeholders): return False
+
+    dim_match = re.search(r'[_\-x](\d+)x(\d+)', src, re.I)
+    if dim_match:
+        w, h = int(dim_match.group(1)), int(dim_match.group(2))
+        if w < 50 and h < 50: return False
+
+    w_param = re.search(r'[?&](?:w|width)=(\d+)', src, re.I)
+    if w_param and int(w_param.group(1)) < 50: return False
+
+    if lower.endswith(".ico"): return False
+    if re.search(r'/(favicon|sprite)\b', lower, re.I): return False
+    if re.search(r'/(icon|arrow|chevron|check|star|dot|close|menu|hamburger|button|btn)/', lower, re.I): return False
+
+    return True
+
+def _normalize_image_url(src: str) -> str:
+    from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+    try:
+        u = urlparse(src)
+        qs = parse_qs(u.query)
+        for p in ["w", "h", "width", "height", "size", "q", "quality", "fit", "resize", "scale", "format", "auto", "fm", "crop", "dpr"]:
+            qs.pop(p, None)
+        u = u._replace(query=urlencode(qs, doseq=True))
+        
+        path = u.path
+        path = re.sub(r'-\d+x\d+(\.[a-zA-Z]+)$', r'\1', path)
+        path = re.sub(r'_\d+x\d+(\.[a-zA-Z]+)$', r'\1', path)
+        path = re.sub(r'@[0-9.]+x(\.[a-zA-Z]+)$', r'\1', path)
+        path = re.sub(r'-(scaled|large|medium|small|thumbnail|full|crop|original)(\.[a-zA-Z]+)$', r'\2', path)
+        path = re.sub(r'/(w_\d+|h_\d+|c_\w+|f_\w+|q_\w+|ar_\w+),?', '/', path)
+        path = re.sub(r'//+', '/', path)
+        u = u._replace(path=path)
+        return urlunparse(u)
+    except:
+        return src
+
+def _score_image(u: str) -> int:
+    lower = u.lower()
+    score = 0
+
+    dim_match = re.search(r'[_\-](\d{3,4})x(\d{3,4})', u, re.I)
+    if dim_match:
+        w, h = int(dim_match.group(1)), int(dim_match.group(2))
+        if w >= 1600 or h >= 1600: score += 40
+        elif w >= 1200 or h >= 1200: score += 30
+        elif w >= 800  or h >= 800:  score += 20
+        elif w >= 400  or h >= 400:  score += 8
+        else: score -= 15
+
+    w_match = re.search(r'[?&](?:w|width|imwidth|imageWidth)=(\d+)', u, re.I)
+    if w_match:
+        w = int(w_match.group(1))
+        if w >= 1600: score += 35
+        elif w >= 1200: score += 25
+        elif w >= 800:  score += 15
+        elif w >= 400:  score += 5
+        elif w < 200:   score -= 25
+
+    if re.search(r'\.(webp|avif)(\?|$)', u, re.I): score += 5
+
+    if re.search(r'/(product|hero|banner|feature|gallery|portfolio|campaign|lifestyle|collection|look|editorial|showcase|flagship)', lower, re.I): score += 20
+    if re.search(r'/(about|brand|identity|team|story|culture|history)', lower, re.I): score += 12
+    if re.search(r'/(images?|img|media|photos?|assets?|uploads?|static|content)/', lower, re.I): score += 5
+    if re.search(r'zoom|retina|highres|fullsize|full[_\-]?size|hi[_\-]?res|@2x|@3x|original', lower, re.I): score += 18
+
+    if re.search(r'og[_\-]?image|social[_\-]?share|opengraph', lower, re.I): score += 25
+
+    if re.search(r'thumbnail|thumb|\bsmall\b|\bmini\b|[_\-]sm[_\-]|[_\-]xs[_\-]|\bpreview\b', lower, re.I): score -= 25
+    if re.search(r'[_\-](50|75|80|100|120|150)x', u, re.I): score -= 20
+    if re.search(r'icon|sprite|arrow|check|star|dot|close|menu|placeholder', lower, re.I): score -= 30
+
+    m = re.search(r'[,/]w_(\d+)[,/]', u, re.I)
+    if m:
+        w = int(m.group(1))
+        if w < 300: score -= 20
+        elif w >= 800: score += 15
+
+    return score
+
 # ── Noise filters ──────────────────────────────────────────────────────────────
 
 _NOISE_HEX = {
@@ -194,29 +297,46 @@ class VisualExtractor:
     # ── Image extraction ───────────────────────────────────────────────────────
 
     def _extract_images(self, soup: BeautifulSoup, base_url: str) -> list[str]:
-        seen: dict[str, None] = {}
+        scored_images: dict[str, int] = {}
 
-        def add(src: str | None) -> None:
-            if src and not src.startswith("data:"):
+        def add(src: str | None, base_score: int = 0) -> None:
+            if src and not src.startswith("data:") and _is_useful_image(src):
                 full = urljoin(base_url, src)
-                seen[full] = None
+                norm = _normalize_image_url(full)
+                score = _score_image(full) + base_score
+                if norm not in scored_images or score > scored_images[norm]:
+                    scored_images[norm] = score
 
         # Social preview images first (highest quality brand assets)
         for prop in ("og:image", "twitter:image"):
             tag = soup.find("meta", attrs={"property": prop}) or \
                   soup.find("meta", attrs={"name": prop})
             if tag:
-                add(tag.get("content"))
+                add(tag.get("content"), base_score=50)
 
-        # <img> tags
+        # <img> tags and <picture> sources
         for img in soup.find_all("img"):
             src = (img.get("src") or img.get("data-src") or
                    img.get("data-lazy-src") or img.get("data-original"))
             add(src)
-            if len(seen) >= 25:
-                break
+            
+            # Check srcset for higher quality options
+            srcset = img.get("srcset") or img.get("data-srcset")
+            if srcset:
+                for entry in srcset.split(","):
+                    parts = entry.strip().split()
+                    if parts:
+                        add(parts[0], base_score=10) # slightly favor srcset variants
 
-        return list(seen.keys())
+        # Also check background images
+        for el in soup.find_all(style=re.compile(r'background-image\s*:')):
+            m = re.search(r'url\((["\']?)([^)"\']+)\1\)', el.get("style", ""))
+            if m:
+                add(m.group(2))
+
+        # Sort by score descending and return top ones (up to 200)
+        sorted_images = sorted(scored_images.items(), key=lambda x: x[1], reverse=True)
+        return [url for url, score in sorted_images[:200]]
 
     # ── Logo detection ─────────────────────────────────────────────────────────
 

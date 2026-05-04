@@ -144,12 +144,7 @@ class ScraperEngine:
             result.visual_assets = VisualAssets()
 
         # ── 6. SPA JS-render fallback ──────────────────────────────────
-        if site_type == SiteType.SPA:
-            _emit(on_progress, "SPA detected — attempting JS-rendered extraction", 68)
-            richer = self._playwright_text(url)
-            if result.pages and richer and len(richer) > len(result.pages[0].text_content):
-                result.pages[0].text_content = richer[:5000]
-                result.pages[0].word_count   = len(richer.split())
+        # (Removed: Playwright is now used natively in the crawler)
 
         # ── 7. Final status ────────────────────────────────────────────
         _emit(on_progress, "Finalizing extraction results", 88)
@@ -168,17 +163,3 @@ class ScraperEngine:
         return result
 
     # ------------------------------------------------------------------ helpers
-
-    def _playwright_text(self, url: str) -> str:
-        """Extract JS-rendered body text via Playwright (best-effort)."""
-        try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page    = browser.new_page()
-                page.goto(url, wait_until="networkidle", timeout=20_000)
-                text = page.inner_text("body")
-                browser.close()
-                return text
-        except Exception:
-            return ""

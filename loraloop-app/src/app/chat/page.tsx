@@ -24,7 +24,28 @@ const SUGGESTIONS = [
 
 export default function ChatPage() {
   const searchParams = useSearchParams();
-  const businessId = searchParams.get("id");
+  const paramBusinessId = searchParams.get("id");
+
+  const [resolvedBusinessId, setResolvedBusinessId] = useState<string | null>(paramBusinessId);
+  const businessId = resolvedBusinessId;
+
+  // If no ?id= in URL, auto-detect the most recent business
+  useEffect(() => {
+    if (paramBusinessId) {
+      setResolvedBusinessId(paramBusinessId);
+      return;
+    }
+    // Try to find the latest business
+    fetch("/api/get-all-businesses")
+      .then(res => res.json())
+      .then(data => {
+        const businesses = data.businesses || [];
+        if (businesses.length > 0) {
+          setResolvedBusinessId(businesses[0].id);
+        }
+      })
+      .catch(() => { /* no businesses — that's ok */ });
+  }, [paramBusinessId]);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -257,7 +278,7 @@ export default function ChatPage() {
             const imageRes = await fetch("/api/generate-media", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ prompt: postData.image_prompt, type: "image" }),
+              body: JSON.stringify({ prompt: postData.image_prompt, type: "image", businessId }),
               signal: abortController.signal,
             });
             const imageData = await imageRes.json();
@@ -317,7 +338,7 @@ export default function ChatPage() {
         const imageRes = await fetch("/api/generate-media", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: validatedPrompt, type: "image" }),
+          body: JSON.stringify({ prompt: validatedPrompt, type: "image", businessId }),
           signal: abortController.signal,
         });
         const imageData = await imageRes.json();
@@ -369,88 +390,92 @@ export default function ChatPage() {
   const isGenerating = uiAction === "generating";
 
   return (
-    <div className="flex h-screen bg-[#F4F5F7] overflow-hidden ml-[260px]">
+    <div className="flex h-[calc(100vh)] bg-[#F3F5FA] overflow-hidden">
 
       {/* ── LORA AGENT SIDEBAR ── */}
-      <div className="w-[300px] flex-shrink-0 bg-gradient-to-b from-[#1E40AF] to-[#0F172A] flex flex-col relative shadow-xl z-10">
-        <div className="p-8 pb-4 relative z-10">
-          <div className="w-32 h-32 mx-auto rounded-full bg-blue-300/20 overflow-hidden mb-6 ring-4 ring-white/10 relative">
-            <img src="/lora-avatar.png" alt="Lora" className="w-full h-full object-cover" onError={(e) => {
+      <div className="w-[280px] flex-shrink-0 bg-[#0A3F8E] flex flex-col relative shadow-xl z-10">
+        {/* Full-width Avatar Header */}
+        <div className="relative w-full h-[240px] shrink-0">
+          <img 
+            src="/lora-avatar.png" 
+            alt="Lora" 
+            className="w-full h-full object-cover" 
+            onError={(e) => {
               (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="%23fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>';
-            }} />
-          </div>
+            }} 
+          />
+          {/* Gradient fade into sidebar background */}
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0A3F8E] via-[#0A3F8E]/40 to-transparent"></div>
+        </div>
+
+        <div className="px-6 relative z-10 -mt-8">
           <div className="flex items-center justify-between mb-1">
-            <h2 className="text-white text-2xl font-bold">Lora</h2>
+            <h2 className="text-white text-[22px] font-bold">Lora</h2>
             <div className="flex gap-2">
-              <button className="text-white/70 hover:text-white"><LucideImage className="w-5 h-5" /></button>
-              <button className="text-white/70 hover:text-white"><Settings className="w-5 h-5" /></button>
+              <button className="text-white/80 hover:text-white transition-colors"><LucideImage className="w-4 h-4" /></button>
+              <button className="text-white/80 hover:text-white transition-colors"><Settings className="w-4 h-4" /></button>
             </div>
           </div>
-          <p className="text-white/70 text-[14px]">AI Marketing Lead</p>
+          <p className="text-white/80 text-[13px] mb-6">AI Marketing Lead</p>
 
           <button
             onClick={() => setMessages([])}
-            className="w-full mt-6 bg-[#3B82F6] hover:bg-[#2563EB] text-white py-3 rounded-xl font-semibold shadow-lg transition-colors"
+            className="w-full bg-[#3B82F6] hover:bg-[#2563EB] text-white py-2.5 rounded-full font-semibold shadow-md transition-colors flex items-center justify-center gap-2 text-[14px]"
           >
-            New Chat +
+            + New Chat
           </button>
         </div>
 
         {/* Recent chats */}
-        <div className="flex-1 px-5 mt-2 overflow-y-auto">
-          <h3 className="text-white/50 text-[11px] font-bold uppercase tracking-wider mb-3">Recent</h3>
-          {messages.filter(m => m.role === "user").slice(-5).reverse().map((m) => (
-            <div key={m.id} className="text-white/70 text-[13px] mb-2 truncate hover:text-white cursor-pointer transition-colors px-2 py-1.5 rounded-lg hover:bg-white/5">
-              {m.content.slice(0, 40)}...
+        <div className="flex-1 px-6 mt-8 overflow-y-auto">
+          {messages.length === 0 ? (
+            <div className="text-center mt-10">
+              <h3 className="text-white font-semibold text-[14px] mb-1">History is empty</h3>
+              <p className="text-white/60 text-[12px] leading-relaxed">New conversations will<br/>appear here</p>
             </div>
-          ))}
+          ) : (
+            <>
+              <h3 className="text-white/50 text-[11px] font-bold uppercase tracking-wider mb-3">Recent</h3>
+              {messages.filter(m => m.role === "user").slice(-5).reverse().map((m) => (
+                <div key={m.id} className="text-white/80 text-[13px] mb-2 truncate hover:text-white cursor-pointer transition-colors py-1.5 hover:bg-white/5 rounded-md -mx-2 px-2">
+                  {m.content.slice(0, 40)}...
+                </div>
+              ))}
+            </>
+          )}
         </div>
 
-        {/* Credit Banner */}
-        <div className="p-6 mt-auto">
-          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 mb-3 border border-white/5">
-            <div className="flex justify-between items-center mb-1">
-              <span className="text-white text-sm font-bold">Earn AI Credits</span>
-              <span className="text-white/70 text-xs">🎁</span>
-            </div>
-            <p className="text-white/60 text-[11px]">100 credits per paid referral</p>
-          </div>
-          <div className="bg-[#E0EEBA] rounded-xl p-3 flex items-center gap-2 text-[#111111] font-bold text-sm">
-            <Sparkles className="w-4 h-4 text-blue-600" />
-            250 AI Credits
-          </div>
-        </div>
       </div>
 
       {/* ── MAIN CHAT AREA ── */}
-      <div className="flex-1 flex flex-col relative bg-white">
+      <div className="flex-1 flex flex-col relative bg-transparent">
 
         {/* Chat History */}
-        <div className="flex-1 overflow-y-auto p-10 space-y-8 scroll-smooth">
+        <div className="flex-1 overflow-y-auto p-10 space-y-8 scroll-smooth pb-32">
           {messages.length === 0 && (
             <div className="max-w-3xl mx-auto pt-10">
-              <div className="flex items-center gap-3 mb-8">
-                <div className="w-10 h-10 bg-[#3B82F6] rounded-full flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-                  <Sparkles className="w-5 h-5" />
+              <div className="flex items-center gap-3 mb-10">
+                <div className="w-8 h-8 rounded-full overflow-hidden shrink-0">
+                  <img src="/lora-avatar.png" alt="Lora" className="w-full h-full object-cover" />
                 </div>
-                <h1 className="text-xl font-medium text-[#111111]">Hi, How can i help you today</h1>
+                <h1 className="text-[17px] italic text-[#111111] font-medium">Hi, How can i help you today?</h1>
               </div>
 
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 max-w-[500px]">
                 {SUGGESTIONS.map((sug, i) => (
                   <button
                     key={i}
                     onClick={() => handleSend(sug)}
-                    className="self-start text-left bg-white border border-[#E5E7EB] hover:border-[#3B82F6] hover:shadow-md px-5 py-3.5 rounded-2xl text-[14px] text-[#3F3F46] hover:text-[#111111] transition-all font-medium flex items-center justify-between min-w-[300px]"
+                    className="self-start w-full text-left bg-white border border-[#E5E7EB] hover:border-[#3B82F6] hover:shadow-sm px-6 py-4 rounded-full text-[14px] text-[#3F3F46] hover:text-[#111111] transition-all font-medium flex items-center justify-between"
                   >
-                    {sug} <ArrowUp className="w-4 h-4 rotate-45 opacity-50" />
+                    {sug} <ArrowUp className="w-4 h-4 rotate-45 text-[#A1A1AA]" />
                   </button>
                 ))}
               </div>
             </div>
           )}
 
-          <div className="max-w-4xl mx-auto w-full space-y-8 pb-10">
+          <div className="max-w-4xl mx-auto w-full space-y-8">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex gap-4 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
 
@@ -477,13 +502,17 @@ export default function ChatPage() {
 
                   {/* Text Bubble */}
                   <div className={`px-6 py-4 rounded-[24px] text-[15px] leading-relaxed ${msg.role === "user"
-                    ? "bg-[#E2E8F0] text-[#0F172A] rounded-tr-sm"
+                    ? "bg-[#DDE5EF] text-[#0F172A] rounded-tr-sm font-medium"
                     : "bg-transparent text-[#111111] p-0 mb-3"
                     }`}>
                     {msg.role === "assistant" && (
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100 flex items-center gap-1">
-                          <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></div> AI Agents Deep Analyse
+                        <span className="text-xs font-bold text-blue-600 bg-[#EEF2FF] px-2.5 py-1 rounded-full border border-blue-100/50 flex items-center gap-1.5">
+                          <div className="w-6 h-3 relative flex items-center justify-center">
+                            <div className="absolute w-[20px] h-[12px] bg-blue-500 rounded-full opacity-30 animate-ping"></div>
+                            <div className="w-2.5 h-2.5 bg-[#3B82F6] rounded-full z-10 border-2 border-white"></div>
+                          </div>
+                          AI Agents Deep Analyse
                         </span>
                       </div>
                     )}
@@ -492,18 +521,24 @@ export default function ChatPage() {
 
                   {/* Widgets */}
                   {msg.widget === "social-post" && msg.widgetData && (
-                    <div className="mt-4 border border-[#E5E7EB] bg-white rounded-3xl p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] w-full max-w-[500px]">
+                    <div className="mt-4 border border-[#E5E7EB] bg-white rounded-3xl p-6 shadow-sm w-full max-w-[540px]">
                       <div className="flex items-center justify-between mb-6">
-                        <div>
-                          <h3 className="font-bold text-[#111111]">Content Generated</h3>
-                          <div className="flex items-center gap-1.5 text-orange-500 text-xs font-semibold mt-1">
-                            <div className="w-3 h-3 rounded-full border-2 border-orange-500 border-t-transparent animate-spin"></div>
-                            Needs review
-                          </div>
+                        <div className="flex items-center gap-3">
+                           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-pink-500 to-orange-400 flex items-center justify-center shadow-md">
+                             <img src="/instagram-icon.svg" alt="Instagram" className="w-6 h-6 object-contain filter invert opacity-0" onError={(e) => e.currentTarget.style.display='none'} />
+                             <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+                           </div>
+                           <div>
+                             <h3 className="font-bold text-[#111111]">Content Generated</h3>
+                             <div className="flex items-center gap-1.5 text-orange-500 text-xs font-semibold mt-0.5">
+                               <div className="w-3 h-3 rounded-full border-2 border-orange-500 border-t-transparent animate-spin"></div>
+                               Needs review
+                             </div>
+                           </div>
                         </div>
                         <div className="flex gap-2">
-                          <button className="px-5 py-2 rounded-full border border-[#E5E7EB] text-sm font-semibold text-[#111111] hover:bg-gray-50">Edit</button>
-                          <button className="px-5 py-2 rounded-full bg-[#2563EB] text-white text-sm font-semibold hover:bg-[#1D4ED8] shadow-md shadow-blue-500/20">Approve</button>
+                          <button className="px-5 py-2 rounded-full border border-[#E5E7EB] text-sm font-semibold text-[#111111] hover:bg-gray-50 transition-colors bg-[#F9FAFB]">Edit</button>
+                          <button className="px-5 py-2 rounded-full bg-[#2563EB] text-white text-sm font-semibold hover:bg-[#1D4ED8] transition-colors">Approve</button>
                         </div>
                       </div>
 
@@ -535,14 +570,14 @@ export default function ChatPage() {
                   <Sparkles className="w-4 h-4 text-white animate-pulse" />
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className="bg-transparent text-[#71717A] text-[15px] px-2 py-2 flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <div className="bg-transparent text-[#A1A1AA] text-[24px] px-2 py-2 flex items-center gap-1 font-bold tracking-widest">
+                    <span className="animate-pulse" style={{ animationDelay: '0ms' }}>.</span>
+                    <span className="animate-pulse" style={{ animationDelay: '150ms' }}>.</span>
+                    <span className="animate-pulse" style={{ animationDelay: '300ms' }}>.</span>
                   </div>
                   <button
                     onClick={handleCancel}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-50 text-red-600 text-xs font-semibold hover:bg-red-100 transition-colors border border-red-200"
+                    className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-white text-red-500 text-xs font-bold hover:bg-gray-50 transition-colors border border-gray-200"
                   >
                     <Square className="w-3 h-3" fill="currentColor" />
                     Stop
@@ -554,27 +589,30 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Input Area */}
-        <div className="p-6 bg-white border-t border-[#F4F4F5]">
-          <div className="max-w-4xl mx-auto">
+        {/* Input Area (Floating) */}
+        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-[#F3F5FA] via-[#F3F5FA] to-transparent pt-10 pb-6 px-6">
+          <div className="max-w-3xl mx-auto">
 
             {/* Uploaded Image Preview */}
             {uploadedImagePreview && (
-              <div className="mb-3 flex items-start gap-2">
-                <div className="relative rounded-xl overflow-hidden border border-[#E5E7EB] w-20 h-20">
+              <div className="mb-3 flex items-start gap-2 bg-white p-2 rounded-2xl border border-[#E5E7EB] shadow-sm inline-flex">
+                <div className="relative rounded-xl overflow-hidden w-16 h-16 shrink-0">
                   <img src={uploadedImagePreview} alt="Upload preview" className="w-full h-full object-cover" />
                   <button
                     onClick={clearUploadedImage}
-                    className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
+                    className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors backdrop-blur-sm"
                   >
                     <X className="w-3 h-3" />
                   </button>
                 </div>
-                <span className="text-xs text-[#A1A1AA] mt-2">Image attached — will be validated against brand guidelines</span>
+                <div className="py-1 px-2">
+                  <span className="text-[13px] font-semibold text-gray-700 block">Image attached</span>
+                  <span className="text-[11px] text-gray-400">Ready for brand validation</span>
+                </div>
               </div>
             )}
 
-            <div className="relative flex items-center" onDrop={handleDrop} onDragOver={handleDragOver}>
+            <div className="relative flex items-center bg-white border border-[#E5E7EB] rounded-full shadow-sm hover:shadow-md transition-shadow" onDrop={handleDrop} onDragOver={handleDragOver}>
               {/* Hidden file input */}
               <input
                 ref={fileInputRef}
@@ -585,10 +623,10 @@ export default function ChatPage() {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="absolute left-4 text-[#A1A1AA] hover:text-[#111111] transition-colors"
+                className="absolute left-4 text-[#A1A1AA] hover:text-[#111111] transition-colors bg-gray-50 p-1.5 rounded-full"
                 title="Upload image"
               >
-                <Paperclip className="w-5 h-5" />
+                <Paperclip className="w-4 h-4" />
               </button>
               <input
                 type="text"
@@ -597,15 +635,15 @@ export default function ChatPage() {
                 onKeyDown={(e) => e.key === "Enter" && handleSend(input)}
                 onPaste={handlePaste}
                 placeholder="How can Loraloop help you today? (Paste images with Ctrl+V)"
-                className="w-full bg-[#FAFBFC] border border-[#E5E7EB] rounded-full py-4 pl-12 pr-14 text-[15px] text-[#111111] outline-none hover:border-[#D4D4D8] focus:border-[#3B82F6] focus:bg-white transition-all placeholder:text-[#A1A1AA]"
+                className="w-full bg-transparent rounded-full py-4 pl-[52px] pr-[52px] text-[14px] text-[#111111] outline-none placeholder:text-[#A1A1AA] font-medium"
                 disabled={isGenerating}
               />
               <button
                 onClick={() => handleSend(input)}
                 disabled={(!input.trim() && !uploadedImage) || isGenerating}
-                className="absolute right-3 w-8 h-8 bg-[#D4D4D8] rounded-full flex items-center justify-center text-white hover:bg-[#111111] disabled:opacity-50 transition-colors"
+                className="absolute right-2.5 w-9 h-9 bg-[#E4E4E7] rounded-full flex items-center justify-center text-white hover:bg-[#A1A1AA] disabled:bg-[#F4F4F5] disabled:text-[#D4D4D8] transition-colors"
               >
-                <ArrowUp className="w-4 h-4" strokeWidth={3} />
+                <ArrowUp className="w-4 h-4 rotate-45" strokeWidth={2.5} />
               </button>
             </div>
             <p className="text-center text-[12px] text-[#A1A1AA] mt-3">

@@ -10,19 +10,10 @@ import time
 from urllib.parse import urlparse, urljoin
 from typing import Optional
 
-import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from lora.scraper.models import SiteType
-
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-}
 
 # Pages worth crawling first (ordered by brand-content value)
 _PRIORITY_PATHS = [
@@ -32,7 +23,7 @@ _PRIORITY_PATHS = [
     "home",
 ]
 
-# SPA framework fingerprints in raw HTML
+# SPA framework fingerprints in raw HTML (less relevant now that we use Playwright, but kept for classification)
 _SPA_SIGNALS = [
     r'data-reactroot',
     r'__NEXT_DATA__',
@@ -48,19 +39,74 @@ _SPA_SIGNALS = [
 ]
 
 
+def auto_scroll(page):
+    """
+    Scrolls down the page to trigger lazy-loaded images, then scrolls back up slightly.
+    Equivalent to the TypeScript autoScroll logic.
+    """
+    page.evaluate('''
+        () => new Promise((resolve) => {
+            let totalHeight = 0;
+            let lastImgCount = 0;
+            let stallCount = 0;
+            const distance = 600;
+            const maxStalls = 5;
+            const maxHeight = 25000;
+
+            const timer = setInterval(() => {
+                const currentImgCount = document.querySelectorAll("img, [style*='background-image']").length;
+                window.scrollBy(0, distance);
+                totalHeight += distance;
+
+                if (currentImgCount === lastImgCount) {
+                    stallCount++;
+                } else {
+                    stallCount = 0;
+                    lastImgCount = currentImgCount;
+                }
+
+                const atBottom = totalHeight + window.innerHeight >= document.body.scrollHeight;
+                if (atBottom || totalHeight > maxHeight || stallCount >= maxStalls) {
+                    clearInterval(timer);
+                    window.scrollTo(0, 0);
+                    resolve();
+                }
+            }, 150);
+        })
+    ''')
+    
+    # Scroll back slowly to trigger any IntersectionObserver that requires upward scroll
+    page.evaluate('''
+        () => new Promise((resolve) => {
+            const total = document.body.scrollHeight;
+            let pos = 0;
+            const step = 400;
+            const timer = setInterval(() => {
+                pos += step;
+                window.scrollTo(0, pos);
+                if (pos >= total) {
+                    clearInterval(timer);
+                    window.scrollTo(0, 0);
+                    resolve();
+                }
+            }, 80);
+        })
+    ''')
+
+
 class WebCrawler:
     """
-    Polite multi-page crawler.
+    Polite multi-page crawler using Playwright.
 
     - Follows internal links (up to max_pages)
     - Prioritises about/mission/values pages
     - Detects SPA frameworks
-    - Delays 0.4 s between requests (polite crawl)
+    - Renders JS and scrolls to trigger lazy loading
     """
 
     def __init__(self, max_pages: int = 5, timeout: int = 15):
         self.max_pages = max_pages
-        self.timeout   = timeout
+        self.timeout   = timeout * 1000  # Playwright uses milliseconds
 
     # ------------------------------------------------------------------ public
 
@@ -81,52 +127,68 @@ class WebCrawler:
         pages:    list[tuple[str, str]] = []
         first_html = ""
 
-        while queue and len(pages) < self.max_pages:
-            url = queue.pop(0)
-            norm = self._normalize(url)
-            if norm in visited:
-                continue
-            visited.add(norm)
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                # Ignore HTTPS errors and use a standard viewport to ensure mobile layouts don't hide desktop assets
+                context = browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    ignore_https_errors=True
+                )
+                page = context.new_page()
 
-            try:
-                html, status = self._fetch(url)
-            except requests.Timeout:
-                if not pages:
-                    return [], SiteType.LIMITED, "timeout"
-                break
-            except requests.ConnectionError as exc:
-                if not pages:
-                    return [], SiteType.LIMITED, f"connection_error: {exc}"
-                break
-            except Exception as exc:
-                if not pages:
-                    return [], SiteType.LIMITED, str(exc)
-                continue
+                while queue and len(pages) < self.max_pages:
+                    url = queue.pop(0)
+                    norm = self._normalize(url)
+                    if norm in visited:
+                        continue
+                    visited.add(norm)
 
-            if status >= 400:
-                continue
+                    try:
+                        # Wait for DOM content to be loaded at minimum
+                        resp = page.goto(url, timeout=self.timeout, wait_until="domcontentloaded")
+                        if resp and resp.status >= 400:
+                            continue
+                        
+                        # Dismiss potential popups simply by evaluating escape
+                        page.keyboard.press("Escape")
 
-            pages.append((url, html))
-            if not first_html:
-                first_html = html
+                        # Scroll down to load images
+                        auto_scroll(page)
+                        
+                        # Let network settle briefly after scroll
+                        page.wait_for_timeout(1000)
 
-            # Enqueue more internal links
-            if len(pages) < self.max_pages:
-                new_links = self._extract_links(html, url, start_url, visited)
-                queue.extend(self._prioritize(new_links)[:8])
+                        html = page.content()
+                    except PlaywrightTimeoutError:
+                        if not pages:
+                            browser.close()
+                            return [], SiteType.LIMITED, "timeout"
+                        break
+                    except Exception as exc:
+                        if not pages:
+                            browser.close()
+                            return [], SiteType.LIMITED, str(exc)
+                        continue
 
-            time.sleep(0.4)   # polite delay
+                    pages.append((url, html))
+                    if not first_html:
+                        first_html = html
+
+                    # Enqueue more internal links
+                    if len(pages) < self.max_pages:
+                        new_links = self._extract_links(html, url, start_url, visited)
+                        queue.extend(self._prioritize(new_links)[:8])
+
+                browser.close()
+        except Exception as e:
+            if not pages:
+                return [], SiteType.LIMITED, f"playwright_error: {e}"
 
         site_type = self._classify(first_html, len(pages))
         return pages, site_type, ""
 
     # ------------------------------------------------------------------ helpers
-
-    def _fetch(self, url: str) -> tuple[str, int]:
-        resp = requests.get(
-            url, headers=_HEADERS, timeout=self.timeout, allow_redirects=True
-        )
-        return resp.text, resp.status_code
 
     def _normalize(self, url: str) -> str:
         p = urlparse(url)

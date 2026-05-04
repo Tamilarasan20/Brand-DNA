@@ -284,3 +284,51 @@ export async function callGemini(options: GeminiCallOptions): Promise<GeminiResu
   error.detail = lastError.slice(0, 400);
   throw error;
 }
+
+export async function generateGeminiImage(prompt: string, businessId?: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY || "";
+  if (!apiKey) throw new Error("GEMINI_API_KEY not configured in .env.local");
+
+  const genAI = new GoogleGenAI({ apiKey });
+
+  let finalPrompt = prompt;
+
+  // ─── BRAND CONSISTENCY ENFORCEMENT ───
+  if (businessId) {
+    const { localDb } = await import("@/lib/localDb");
+    const business = localDb.get(businessId);
+    if (business) {
+      const guidelines = business.brand_guidelines || {};
+      const visualId = business.brand_memory?.visual_identity || {};
+      const primaryColor = guidelines.colors?.[0]?.hex || "#333";
+      const accentColor = guidelines.colors?.[1]?.hex || "#555";
+      const imageStyle = visualId.image_style || business.enriched_data?.brandAesthetic || "modern, high quality";
+      
+      finalPrompt = `[Brand Aesthetics: ${imageStyle}. Color palette to emphasize: ${primaryColor}, ${accentColor}. Ensure lighting and composition is professional commercial standard] ${prompt}`;
+    }
+  }
+
+  try {
+    const response = await genAI.models.generateImages({
+      model: 'imagen-3.0-generate-002',
+      prompt: finalPrompt,
+      config: {
+        numberOfImages: 1,
+        outputMimeType: 'image/jpeg',
+      }
+    });
+
+    if (response.generatedImages && response.generatedImages.length > 0) {
+      return response.generatedImages[0].image.imageBytes;
+    }
+    throw new Error("No image generated");
+  } catch (err: any) {
+    console.error("[generateGeminiImage] Error:", err);
+    throw err;
+  }
+}
+
+export async function generateGeminiVideo(prompt: string): Promise<string> {
+  // Veo integration placeholder / stub
+  throw new Error("Video generation is not currently available. Please use image generation.");
+}

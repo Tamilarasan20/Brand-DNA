@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
-    const { prompt, type } = await req.json();
+    const { prompt, type, businessId } = await req.json();
 
     if (!prompt) {
       return NextResponse.json({ error: "prompt is required" }, { status: 400 });
@@ -10,7 +10,7 @@ export async function POST(req: Request) {
 
     if (type === "image") {
       const { generateGeminiImage } = await import("@/lib/gemini");
-      const base64Bytes = await generateGeminiImage(prompt);
+      const base64Bytes = await generateGeminiImage(prompt, businessId);
       // gemini-3.1-flash-image-preview returns PNG
       const dataUrl = `data:image/png;base64,${base64Bytes}`;
       return NextResponse.json({ mediaUrl: dataUrl, type: "image", source: "gemini-flash-image" });

@@ -993,270 +993,33 @@ export async function POST(req: Request) {
     let pageTitle = "";
 
     try {
-      browser = await chromium.launch({
-        headless: true,
-        args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+      console.log(`[extract-dna] Proxying scrape request to Python backend for ${url}...`);
+      const pyRes = await fetch(`http://127.0.0.1:8000/scrape-only?url=${encodeURIComponent(url)}`, {
+        signal: AbortSignal.timeout(60000)
       });
-
-      const context = await browser.newContext({
-        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        viewport: { width: 1440, height: 900 },
-        extraHTTPHeaders: {
-          "Accept-Language": "en-US,en;q=0.9",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        },
-        javaScriptEnabled: true,
-        bypassCSP: true,
-      });
-
-      // Block heavy non-image assets
-      await context.route("**/*.{mp4,webm,ogg,mp3,wav,flac,woff2,woff,ttf,eot,pdf,zip}", (route) => route.abort());
-
-      const page = await context.newPage();
-
-      // ── NETWORK INTERCEPTION — captures every image request the browser makes
-      const networkImages: string[] = [];
-      const jsonImagePromises: Promise<void>[] = [];
-
-      page.on("response", (response) => {
-        try {
-          const respUrl = response.url();
-          const ct = response.headers()["content-type"] || "";
-          if (
-            (ct.startsWith("image/jpeg") || ct.startsWith("image/png") ||
-              ct.startsWith("image/webp") || ct.startsWith("image/avif") ||
-              /\.(jpg|jpeg|png|webp|avif)(\?|#|$)/i.test(respUrl)) &&
-            isUsefulImage(respUrl)
-          ) {
-            networkImages.push(respUrl);
-          }
-          if (ct.includes("application/json") && !respUrl.match(/analytics|tracking|gtm|google|facebook|hotjar|segment/i)) {
-            const p = response.json()
-              .then((json) => extractImagesFromJson(json, networkImages))
-              .catch(() => {});
-            jsonImagePromises.push(p);
-          }
-        } catch { /* */ }
-      });
-
-      console.log("[extract-dna] 📄 Loading main page...");
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 25000 });
-      try { await page.waitForLoadState("networkidle", { timeout: 5000 }); } catch { /* ok */ }
-
-      await dismissPopups(page);
-      console.log("[extract-dna] 📜 Scrolling + interacting...");
-      await autoScroll(page);
-      await clickCarousels(page);
-      await page.waitForTimeout(500);
-
-      const mainData = await scrapePage(page);
-      extractedColors = mainData.colors;
-      extractedFonts = mainData.fonts;
-      extractedLogo = mainData.logoUrl;
-      extractedImages = [...mainData.images];
-      textSample = mainData.textSample;
-      pageTitle = mainData.pageTitle;
-
-      console.log(`[extract-dna] ✅ Main page: ${extractedImages.length} images, ${extractedColors.length} colors`);
-
-      // ── SUB-PAGE CRAWLER
-      const scrapeSubPage = async (link: string) => {
-        const subPage = await context.newPage();
-        try {
-          await subPage.goto(link, { waitUntil: "domcontentloaded", timeout: 15000 });
-          try { await subPage.waitForLoadState("networkidle", { timeout: 3000 }); } catch { /* ok */ }
-          await dismissPopups(subPage);
-          await autoScroll(subPage);
-          await clickCarousels(subPage);
-          const subData = await scrapePage(subPage);
-          console.log(`[extract-dna]   ✅ ${link} — +${subData.images.length} images`);
-          return subData;
-        } catch (err) {
-          console.warn(`[extract-dna]   ⚠ Failed: ${link}`, err);
-          return null;
-        } finally {
-          await subPage.close();
+      const pyData = await pyRes.json();
+      
+      if (pyData && !pyData.error) {
+        if (pyData.visual_assets) {
+          extractedImages = pyData.visual_assets.all_images || [];
+          extractedLogo = pyData.visual_assets.logo_url || "";
+          extractedColors = pyData.visual_assets.colors?.all_colors || [];
+          extractedFonts = pyData.visual_assets.typography?.all_fonts || [];
         }
-      };
-
-      // Crawl up to 8 nav sub-pages + CSS + sitemap + e-commerce APIs all in parallel
-      const internalLinks = mainData.internalLinks.slice(0, 8);
-      const origin = new URL(url).origin;
-      if (internalLinks.length > 0) {
-        console.log(`[extract-dna] 🔗 Crawling ${internalLinks.length} sub-pages in parallel...`);
-      }
-
-      const [subResults, cssImages, sitemapUrls, ecommerceImages] = await Promise.all([
-        Promise.allSettled(internalLinks.map(scrapeSubPage)),
-        fetchExternalCssImages(page).catch(() => [] as string[]),
-        fetchSitemapUrls(origin).catch(() => [] as string[]),
-        scrapeEcommerceApis(origin).catch(() => [] as string[]),
-      ]);
-
-      // Merge sub-page results
-      for (const result of subResults) {
-        if (result.status !== "fulfilled" || !result.value) continue;
-        const subData = result.value;
-        for (const img of subData.images) {
-          if (!extractedImages.includes(img)) extractedImages.push(img);
+        if (pyData.snapshot_url) {
+          extractedImages.unshift(pyData.snapshot_url);
         }
-        if (subData.textSample) textSample += " | " + subData.textSample;
-        for (const c of subData.colors) {
-          if (!extractedColors.includes(c)) extractedColors.push(c);
+        if (pyData.pages && pyData.pages.length > 0) {
+           pageTitle = pyData.pages[0].title || "";
+           textSample = pyData.pages.map((p: any) => p.text_content).join(" \n\n").slice(0, 6000);
         }
+      } else {
+        throw new Error(pyData.error || "Python backend failed");
       }
-
-      // Merge CSS background images
-      for (const img of cssImages) {
-        if (!extractedImages.includes(img)) extractedImages.push(img);
-      }
-      if (cssImages.length > 0) console.log(`[extract-dna] 🎨 CSS: +${cssImages.length} images`);
-
-      // Merge e-commerce API images
-      for (const img of ecommerceImages) {
-        if (!extractedImages.includes(img)) extractedImages.push(img);
-      }
-
-      // Crawl sitemap product/gallery pages not yet visited
-      if (sitemapUrls.length > 0) {
-        const crawledUrls = new Set([url, ...internalLinks]);
-        const sitemapTargets = sitemapUrls.filter((u) => !crawledUrls.has(u)).slice(0, 6);
-        if (sitemapTargets.length > 0) {
-          console.log(`[extract-dna] 🗺 Crawling ${sitemapTargets.length} sitemap pages...`);
-          const sitemapCrawlResults = await Promise.allSettled(sitemapTargets.map(scrapeSubPage));
-          for (const result of sitemapCrawlResults) {
-            if (result.status !== "fulfilled" || !result.value) continue;
-            for (const img of result.value.images) {
-              if (!extractedImages.includes(img)) extractedImages.push(img);
-            }
-          }
-        }
-      }
-
-      // Flush JSON promises then merge all network-intercepted images
-      await Promise.allSettled(jsonImagePromises);
-      for (const img of networkImages) {
-        if (!extractedImages.includes(img)) extractedImages.push(img);
-      }
-      console.log(`[extract-dna] 🌐 Network interception: +${networkImages.length} images`);
-
-      // Handle manifest logo
-      if (extractedLogo.startsWith("__MANIFEST__:")) {
-        try {
-          const manifestUrl = extractedLogo.replace("__MANIFEST__:", "");
-          const manifestPage = await context.newPage();
-          const resp = await manifestPage.goto(manifestUrl, { timeout: 5000 });
-          const manifestJson = await resp?.json();
-          if (manifestJson?.icons?.length > 0) {
-            const bestIcon = manifestJson.icons[manifestJson.icons.length - 1];
-            extractedLogo = new URL(bestIcon.src, manifestUrl).href;
-          }
-          await manifestPage.close();
-        } catch { extractedLogo = ""; }
-      }
-
-      await browser.close();
-      browser = null;
-
-    } catch (err: unknown) {
-      console.warn("[extract-dna] ⚠ Playwright failed, using HTTP fallback...", err);
-      if (browser) { try { await browser.close(); } catch { /* */ } browser = null; }
-
-      try {
-        const res = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", "Accept": "text/html,application/xhtml+xml" },
-        });
-        const html = await res.text();
-
-        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-        if (titleMatch) pageTitle = titleMatch[1].trim();
-
-        const metaMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
-        const metaDesc = metaMatch ? metaMatch[1] : "";
-
-        const textContent = html
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ");
-        textSample = (metaDesc + " | " + textContent).slice(0, 5000);
-
-        // Extract all img src and srcset
-        const imgRegex = /<img[^>]+>/gi;
-        let imgTag;
-        while ((imgTag = imgRegex.exec(html)) !== null && extractedImages.length < 200) {
-          for (const attr of ["src", "data-src", "data-lazy-src", "data-original"]) {
-            const m = imgTag[0].match(new RegExp(`${attr}=["'](https?://[^"']+)["']`, "i"));
-            if (m && isUsefulImage(m[1])) extractedImages.push(m[1]);
-          }
-          const srcsetM = imgTag[0].match(/srcset=["']([^"']+)["']/i);
-          if (srcsetM) {
-            srcsetM[1].split(",").forEach((entry) => {
-              const u = entry.trim().split(/\s+/)[0];
-              if (u.startsWith("http") && isUsefulImage(u)) extractedImages.push(u);
-            });
-          }
-        }
-
-        // Background images from inline styles
-        const bgRegex = /background(?:-image)?:\s*url\(["']?(https?:\/\/[^"')]+)["']?\)/gi;
-        let match;
-        while ((match = bgRegex.exec(html)) !== null && extractedImages.length < 250) {
-          if (isUsefulImage(match[1])) extractedImages.push(match[1]);
-        }
-
-        // JSON-LD
-        const jldRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-        let jldMatch;
-        while ((jldMatch = jldRegex.exec(html)) !== null) {
-          try {
-            const out: string[] = [];
-            extractImagesFromJson(JSON.parse(jldMatch[1]), out);
-            out.forEach(u => { if (isUsefulImage(u)) extractedImages.push(u); });
-          } catch { /* skip */ }
-        }
-
-        // Colors
-        const colorRegex = /#([0-9a-fA-F]{3,8})\b/g;
-        while ((match = colorRegex.exec(html)) !== null && extractedColors.length < 15) {
-          const hex = "#" + match[1];
-          if (hex.length === 4 || hex.length === 7) extractedColors.push(hex);
-        }
-
-        const logoMatch = html.match(/<img[^>]*(?:class|id|alt)=["'][^"']*logo[^"']*["'][^>]*src=["']([^"']+)["']/i)
-          || html.match(/<img[^>]*src=["']([^"']*logo[^"']*)["']/i);
-        if (logoMatch) extractedLogo = logoMatch[1];
-
-      } catch (fbErr) {
-        console.error("[extract-dna] HTTP fallback also failed:", fbErr);
-      }
+    } catch (e) {
+      console.error("[extract-dna] Python proxy failed", e);
     }
 
-    // ── POST-PROCESSING ──
-
-    // Filter junk
-    extractedImages = extractedImages.filter(isUsefulImage);
-
-    // Sort best quality first, then deduplicate by normalized URL
-    extractedImages.sort((a, b) => scoreImage(b) - scoreImage(a));
-
-    const seenNormalized = new Set<string>();
-    const deduped: string[] = [];
-    for (const img of extractedImages) {
-      const key = normalizeImageUrl(img);
-      if (!seenNormalized.has(key)) {
-        seenNormalized.add(key);
-        deduped.push(img);
-      }
-    }
-    extractedImages = deduped; // no hard cap — keep all quality images
-
-    // Remove images scoring very poorly (likely icons, tracking, or badges)
-    extractedImages = extractedImages.filter((img) => scoreImage(img) > -20);
-
-    console.log(`[extract-dna] 📊 After filter + dedup: ${extractedImages.length} quality images`);
-
-    // Clearbit logo fallback
     if (!extractedLogo || !extractedLogo.startsWith("http")) {
       try {
         const domain = new URL(url).hostname;
@@ -1264,8 +1027,6 @@ export async function POST(req: Request) {
         console.log("[extract-dna] 🔄 Using Clearbit fallback logo:", extractedLogo);
       } catch { /* */ }
     }
-
-    textSample = textSample.slice(0, 6000);
 
     console.log(`[extract-dna] 📊 Final totals: ${extractedImages.length} images, ${extractedColors.length} colors, ${extractedFonts.length} fonts`);
 

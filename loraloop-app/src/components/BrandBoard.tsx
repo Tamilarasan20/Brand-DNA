@@ -34,8 +34,13 @@ interface BrandDna {
 
 const formatPills = (str?: string) => str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export default function BrandBoard({ initialDna }: { initialDna: any }) {
+interface BrandBoardProps {
+  initialDna: BrandDna;
+  businessId?: string | null;
+  onDnaChange?: (dna: BrandDna) => void;
+}
+
+export default function BrandBoard({ initialDna, businessId, onDnaChange }: BrandBoardProps) {
   const [dna, setDna] = useState<BrandDna>(initialDna as BrandDna);
   const [isColorModalOpen, setIsColorModalOpen] = useState(false);
   const [isFontModalOpen, setIsFontModalOpen] = useState(false);
@@ -60,20 +65,24 @@ export default function BrandBoard({ initialDna }: { initialDna: any }) {
       const res = await fetch("/api/scrape-images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: scrapeUrl }),
+        body: JSON.stringify({ url: scrapeUrl, businessId }),
       });
       const data = await res.json();
       if (!res.ok || data.error) { setScrapeError(data.error || "Scrape failed"); return; }
       // Merge new images with existing, deduplicate
       const incoming: string[] = data.images || [];
-      setDna(prev => ({
-        ...prev,
-        images: [...new Set([...incoming, ...(prev.images || [])])].slice(0, 80),
-      }));
+      setDna(prev => {
+        const next = {
+          ...prev,
+          images: [...new Set([...incoming, ...(prev.images || [])])].slice(0, 80),
+        };
+        onDnaChange?.(next);
+        return next;
+      });
       setScrapeResult({ total: data.total, raw: data.raw });
       setShowAllImages(false);
-    } catch (err: any) {
-      setScrapeError(err.message || "Network error");
+    } catch (err: unknown) {
+      setScrapeError(err instanceof Error ? err.message : "Network error");
     } finally {
       setIsScraping(false);
     }
@@ -437,7 +446,7 @@ export default function BrandBoard({ initialDna }: { initialDna: any }) {
             {(dna.images || []).length === 0 && !isScraping && (
               <div className="col-span-4 flex flex-col items-center justify-center py-10 text-[#A1A1AA] gap-3">
                 <Camera className="w-10 h-10 opacity-30" />
-                <div className="text-[13px] font-medium text-center">No images yet.<br/>Click "Scrape Website" to import brand images.</div>
+                <div className="text-[13px] font-medium text-center">No images yet.<br/>Click &quot;Scrape Website&quot; to import brand images.</div>
               </div>
             )}
           </div>

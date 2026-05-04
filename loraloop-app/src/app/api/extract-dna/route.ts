@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { chromium, Browser, Page } from "playwright";
+import { chromium, Page } from "playwright";
 import { callGemini } from "@/lib/gemini";
 
 // ────────────────────────────────────────────────────────────────
@@ -975,8 +975,6 @@ async function fetchSitemapUrls(origin: string): Promise<string[]> {
 // ────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
-  let browser: Browser | null = null;
-
   try {
     const body = await req.json();
     const rawUrl = body?.url;
@@ -1198,7 +1196,5 @@ Rules: Specific to ${parsedDna.brandName}'s industry. Tone of voice: ${parsedDna
     const msg = err instanceof Error ? err.message : "An unexpected server error occurred.";
     console.error("[extract-dna] ❌ Fatal error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
-  } finally {
-    if (browser) { try { await browser.close(); } catch { /* */ } }
   }
 }

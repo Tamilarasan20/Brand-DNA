@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { meterIfAuthed } from "@/lib/withCredits";
 
 export async function POST(req: Request) {
   try {
@@ -7,6 +8,9 @@ export async function POST(req: Request) {
     if (!prompt) {
       return NextResponse.json({ error: "prompt is required" }, { status: 400 });
     }
+
+    const metered = await meterIfAuthed('steve', type === 'video' ? 'carousel' : 'image');
+    if (!metered.ok) return metered.response;
 
     if (type === "image") {
       const { generateGeminiImage } = await import("@/lib/gemini");

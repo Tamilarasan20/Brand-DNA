@@ -4,7 +4,6 @@ import { PRICE_TO_PLAN } from '@/lib/billing';
 import { getServiceSupabase } from '@/lib/supabase';
 import type Stripe from 'stripe';
 
-// Tell Next.js NOT to parse the body — Stripe needs the raw bytes to verify the signature
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
@@ -29,18 +28,42 @@ export async function POST(req: NextRequest) {
 
   const db = getServiceSupabase();
 
+  // Idempotency — Stripe retries failed deliveries, so the same event may
+  // arrive multiple times. The PK conflict on event.id makes this a no-op.
+  const { error: dupeErr } = await db
+    .from('stripe_events')
+    .insert({ id: event.id, type: event.type });
+
+  if (dupeErr) {
+    // Duplicate event — already processed. Return 200 so Stripe stops retrying.
+    return NextResponse.json({ received: true, duplicate: true });
+  }
+
+  try {
+    await handleEvent(db, event);
+  } catch (err) {
+    // Roll back the idempotency marker so retries can re-process this event.
+    await db.from('stripe_events').delete().eq('id', event.id);
+    console.error('[stripe-webhook] handler error:', err);
+    return NextResponse.json({ error: 'Handler failed' }, { status: 500 });
+  }
+
+  return NextResponse.json({ received: true });
+}
+
+type Db = ReturnType<typeof getServiceSupabase>;
+
+async function handleEvent(db: Db, event: Stripe.Event) {
   switch (event.type) {
     case 'customer.subscription.created':
     case 'customer.subscription.updated': {
-      const sub = event.data.object as Stripe.Subscription;
-      await syncSubscription(db, sub);
+      await syncSubscription(db, event.data.object as Stripe.Subscription);
       break;
     }
 
     case 'customer.subscription.deleted': {
       const sub = event.data.object as Stripe.Subscription;
-      await db
-        .from('billing_users')
+      await db.from('billing_users')
         .update({ plan: 'FREE', subscription_status: 'canceled' })
         .eq('stripe_customer_id', sub.customer as string);
       break;
@@ -48,8 +71,7 @@ export async function POST(req: NextRequest) {
 
     case 'invoice.payment_failed': {
       const invoice = event.data.object as Stripe.Invoice;
-      await db
-        .from('billing_users')
+      await db.from('billing_users')
         .update({ subscription_status: 'past_due' })
         .eq('stripe_customer_id', invoice.customer as string);
       break;
@@ -58,22 +80,16 @@ export async function POST(req: NextRequest) {
     case 'invoice.payment_succeeded': {
       const invoice = event.data.object as Stripe.Invoice;
       if ((invoice as Stripe.Invoice & { subscription?: string }).subscription) {
-        await db
-          .from('billing_users')
+        await db.from('billing_users')
           .update({ subscription_status: 'active' })
           .eq('stripe_customer_id', invoice.customer as string);
       }
       break;
     }
   }
-
-  return NextResponse.json({ received: true });
 }
 
-async function syncSubscription(
-  db: ReturnType<typeof getServiceSupabase>,
-  sub: Stripe.Subscription,
-) {
+async function syncSubscription(db: Db, sub: Stripe.Subscription) {
   const priceId = sub.items.data[0]?.price.id ?? '';
   const plan    = PRICE_TO_PLAN[priceId] ?? 'FREE';
 
@@ -87,15 +103,16 @@ async function syncSubscription(
   };
   const subscriptionStatus = statusMap[sub.status] ?? 'active';
 
+  // Stripe sometimes types these as part of expandable parents — cast for safety
   const periodEnd = (sub as Stripe.Subscription & { current_period_end?: number }).current_period_end;
-  const expiresAt = periodEnd ? new Date(periodEnd * 1000).toISOString() : null;
+  const trialEnd  = (sub as Stripe.Subscription & { trial_end?: number | null }).trial_end;
 
-  await db
-    .from('billing_users')
+  await db.from('billing_users')
     .update({
       plan,
       subscription_status: subscriptionStatus,
-      ...(expiresAt ? { plan_expires_at: expiresAt } : {}),
+      ...(periodEnd ? { plan_expires_at: new Date(periodEnd * 1000).toISOString() } : {}),
+      trial_ends_at: trialEnd ? new Date(trialEnd * 1000).toISOString() : null,
     })
     .eq('stripe_customer_id', sub.customer as string);
 }

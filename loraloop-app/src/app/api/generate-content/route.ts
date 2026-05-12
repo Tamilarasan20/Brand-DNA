@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { localDb } from "@/lib/localDb";
 import { callGemini } from "@/lib/gemini";
+import { meterIfAuthed } from "@/lib/withCredits";
 
 // Helper to determine the best agent persona based on the user prompt
 function determineAgentPersona(prompt: string): { name: string; role: string; responsibility: string } {
@@ -29,6 +30,9 @@ export async function POST(req: Request) {
     if (!businessId || !prompt) {
       return NextResponse.json({ error: "businessId and prompt are required" }, { status: 400 });
     }
+
+    const metered = await meterIfAuthed('clara', 'content');
+    if (!metered.ok) return metered.response;
 
     const business = localDb.get(businessId);
     if (!business) {

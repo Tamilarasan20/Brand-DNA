@@ -97,28 +97,27 @@ const INTERVAL_SAVINGS: Record<Interval, string | null> = {
 
 export default function PricingPage() {
   const [interval, setInterval] = useState<Interval>('monthly');
-  const [email, setEmail] = useState('');
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleCheckout(plan: typeof PLANS[number]) {
     setError(null);
-    if (!email.trim() || !email.includes('@')) {
-      setError('Please enter a valid email address above.');
-      return;
-    }
-
     setLoading(plan.key);
     try {
       const res = await fetch('/api/billing/checkout', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email:     email.trim(),
           priceId:   plan.priceIds[interval],
           returnUrl: window.location.href,
         }),
       });
+
+      if (res.status === 401) {
+        // Not logged in — bounce to /login then back here
+        window.location.href = `/login?next=${encodeURIComponent('/pricing')}`;
+        return;
+      }
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Checkout failed');
@@ -170,17 +169,11 @@ export default function PricingPage() {
         </div>
       </div>
 
-      {/* Email input */}
-      <div className="max-w-sm mx-auto mb-10">
-        <input
-          type="email"
-          placeholder="Enter your email to get started"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full bg-slate-800/70 border border-slate-600/60 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition"
-        />
-        {error && <p className="text-red-400 text-xs mt-2 text-center">{error}</p>}
-      </div>
+      {error && (
+        <div className="max-w-sm mx-auto mb-6">
+          <p className="text-red-400 text-xs text-center">{error}</p>
+        </div>
+      )}
 
       {/* Plan cards */}
       <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">

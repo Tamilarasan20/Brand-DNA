@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import { UpgradeModalProvider } from "@/components/UpgradeModal";
+import PaymentFailedBanner from "@/components/PaymentFailedBanner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -27,14 +29,19 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#FAFBFC] text-[#0A0A0A] min-h-screen flex`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#FAFBFC] text-[#0A0A0A] min-h-screen flex flex-col`}
       >
-        <Suspense fallback={<div className="w-[260px] shrink-0 bg-[#FAFBFC] border-r border-[#E5E7EB]" />}>
-          <Sidebar />
-        </Suspense>
-        <main className="flex-1 min-w-0 flex flex-col">
-          {children}
-        </main>
+        <UpgradeModalProvider>
+          <PaymentFailedBanner />
+          <div className="flex flex-1 min-h-0">
+            <Suspense fallback={<div className="w-[260px] shrink-0 bg-[#FAFBFC] border-r border-[#E5E7EB]" />}>
+              <Sidebar />
+            </Suspense>
+            <main className="flex-1 min-w-0 flex flex-col">
+              {children}
+            </main>
+          </div>
+        </UpgradeModalProvider>
       </body>
     </html>
   );

@@ -186,8 +186,6 @@ CRITICAL: Return ONLY the JSON object. No other text.`;
       prompt: generationPrompt,
       mimeType: "application/json",
       minLength: 200,
-      agentName: "Lora",
-      costTier: "sonnet",
     });
 
     let parsed: any;

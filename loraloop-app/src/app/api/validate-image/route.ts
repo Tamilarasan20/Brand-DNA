@@ -105,7 +105,6 @@ Return ONLY a valid JSON object (no markdown, no code fences):
         prompt: validationPrompt,
         mimeType: "application/json",
         minLength: 50,
-        costTier: "haiku",
       });
       validationResult = JSON.parse(result.text);
     } catch {

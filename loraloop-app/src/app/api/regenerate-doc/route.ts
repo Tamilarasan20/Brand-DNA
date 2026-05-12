@@ -524,7 +524,6 @@ export async function POST(req: Request) {
         taskType: TASK_MAP[docType as DocType],
         prompt: docPrompt,
         minLength: 200,
-        costTier: "sonnet",
       });
       content = result.text;
       console.log(`[regenerate-doc] ✅ ${docType} via ${result.model} (${content.length} chars)`);

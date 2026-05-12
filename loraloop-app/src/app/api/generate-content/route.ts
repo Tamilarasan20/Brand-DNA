@@ -146,7 +146,6 @@ Respond directly as ${agent.name}. Do not explain your scoring, just provide the
       taskType: "content-generation",
       prompt: fullPrompt,
       minLength: 50,
-      agentName: agent.name,
     });
 
     return NextResponse.json({ content: result.text });

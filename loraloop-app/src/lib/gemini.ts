@@ -284,3 +284,25 @@ export async function callGemini(options: GeminiCallOptions): Promise<GeminiResu
   error.detail = lastError.slice(0, 400);
   throw error;
 }
+
+// Image generation via Imagen (returns base64 PNG bytes)
+export async function generateGeminiImage(prompt: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY ?? "";
+  if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
+
+  const genAI = new GoogleGenAI({ apiKey });
+  const response = await genAI.models.generateImages({
+    model: "imagen-3.0-generate-002",
+    prompt,
+    config: { numberOfImages: 1, outputMimeType: "image/png" },
+  });
+
+  const b64 = response.generatedImages?.[0]?.image?.imageBytes;
+  if (!b64) throw new Error("No image returned from Imagen");
+  return b64;
+}
+
+// Video generation placeholder — Veo API not yet in google/genai SDK
+export async function generateGeminiVideo(_prompt: string): Promise<string> {
+  throw new Error("Video generation is not yet available. Check back soon.");
+}

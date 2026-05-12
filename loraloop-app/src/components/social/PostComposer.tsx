@@ -6,13 +6,13 @@ import PlatformSelector, { DEFAULT_PLATFORMS } from "./PlatformSelector";
 
 interface PostComposerProps {
   content: string;
-  setContent: (content: string) => void;
+  setContent: React.Dispatch<React.SetStateAction<string>>;
   selectedPlatforms: string[];
-  setSelectedPlatforms: (platforms: string[]) => void;
+  setSelectedPlatforms: React.Dispatch<React.SetStateAction<string[]>>;
   images: File[];
-  setImages: (images: File[]) => void;
+  setImages: React.Dispatch<React.SetStateAction<File[]>>;
   imagePreviews: string[];
-  setImagePreviews: (previews: string[]) => void;
+  setImagePreviews: React.Dispatch<React.SetStateAction<string[]>>;
   onPublish?: (data: ComposerData) => void;
   onSchedule?: (data: ComposerData, date: string) => void;
   onSaveDraft?: (data: ComposerData) => void;

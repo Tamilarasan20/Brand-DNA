@@ -10,6 +10,10 @@ export const AGENT_CREDIT_COST: Record<string, number> = {
   sarah_calendar: 1,
   lora_review:    1,
   lora_strategy:  2,
+  sophie_seo:     3,
+  theo_video:     4,
+  elena_ads:      4,
+  nick_analyze:   2,
 };
 
 export class CreditError extends Error {

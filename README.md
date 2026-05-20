@@ -1,64 +1,53 @@
-# Loraloop — Autonomous AI marketting Team/Company
-Loraloop is a next-generation platform for digital presence, combining AI-driven Brand DNA extraction with a powerful multi-platform social media scheduler, publisher, and analytics engine.
+# Loraloop — Brand DNA Extractor
+
+Loraloop is a focused Next.js web application that uses Playwright and Google Gemini AI to scrape and reverse-engineer any website into a comprehensive **Brand Knowledge Base**. 
+
+This repository has been strictly stripped down to contain **only** the Brand DNA extraction logic. It acts as an autonomous data collection agent that pulls colors, typography, images, and brand positioning out of a public URL, then generates AI-driven social strategy and market research documents.
+
+## 🚀 Features
+
+- **Deep Visual Scraping**: Extracts high-quality images, logos, colors, and typography using a headless browser (Playwright).
+- **AI Enrichment**: Uses Google Gemini to infer brand tone, target audience, tagline, and core aesthetic values.
+- **Document Generation**: Automatically drafts a Business Profile, Market Research brief, and Social Media Strategy based on the extracted DNA.
+- **Local JSON Database**: All brand data and assets are persisted locally on your machine without requiring Supabase or external databases.
 
 ## 🏗️ Repository Structure
 
-- **`/loraloop-app`** — The core Next.js 16 application (App Router, TypeScript, Tailwind CSS).
-- **`/docs`** — Project documentation and research materials.
-- **`docker-compose.yml`** — Infrastructure for the self-hosted Postiz backend.
-- **`setup-postiz.sh`** — Automated setup script for the full developer stack.
+- **`/loraloop-app`** — The core Next.js 16 application (App Router, TypeScript).
+- **`/loraloop-app/src/app/api/extract-dna`** — The Playwright scraper and Gemini extraction pipeline.
+- **`/loraloop-app/src/app/api/process-business`** — The orchestrator that downloads images locally and structures the brand data.
 
-## 🚀 Quick Start
+## 🛠️ Quick Start
 
 ### 1. Requirements
 - **Node.js 18+**
-- **Docker Desktop** (for self-hosted social media backend)
+- **Google Gemini API Key**
 
-### 2. Infrastructure Setup (Postiz Backend)
-The social media features (scheduling, analytics, automation) require the Postiz backend.
-```bash
-./setup-postiz.sh
-```
-This script will:
-- Check for Docker and Docker Compose.
-- Create your `.env.postiz` file.
-- Start the full stack (AppServer, PostgreSQL, Redis, Temporal).
+### 2. Application Setup
 
-### 3. Application Setup
+Navigate to the app directory:
 ```bash
 cd loraloop-app
-npm install
-npm run dev
 ```
-The application will be available at [http://localhost:3000](http://localhost:3000).
 
----
+Install dependencies:
+```bash
+npm install
+```
 
-## 🎨 Brand DNA Tool
-Reverse-engineers any brand by analyzing their website.
-- Extraction of colors, typography, and visual assets.
-- AI-driven analysis of brand values, voice, and positioning.
-- Real-time previews of extracted components.
+Set up your environment variables by creating a `.env.local` file inside `loraloop-app/`:
+```env
+GEMINI_API_KEY="your_google_gemini_api_key_here"
+```
 
-## 📱 Social Media Platform
-Full-stack social media management integrated via [Postiz](https://postiz.com).
-- **Multi-Platform Publisher**: Compose once, post to Instagram, X, LinkedIn, TikTok, and more.
-- **Scheduling Engine**: Visual calendar grid with queue management.
-- **Advanced Analytics**: Engagement tracking and performance insights.
-- **Team Collaboration**: Member roles with approval workflows.
-- **Automation Hub**: Custom trigger-action rules for social engagement.
+Start the development server:
+```bash
+npm run dev -- --port 3001
+```
 
----
+The application will be available at [http://localhost:3001](http://localhost:3001).
 
-## 🔐 Environment Variables
+## 🗃️ How Data is Stored
 
-- **`.env.local`** (in `loraloop-app/`): Application-specific secrets (Gemini API key).
-- **`.env.postiz`** (in root): Social media platform OAuth keys (X, Meta, LinkedIn).
-
----
-
-## 🛠️ Tech Stack
-
-- **Frontend**: Next.js 16 (Turbopack), TypeScript, Lucide Icons, Vanilla CSS Design System.
-- **AI**: Google Gemini Pro (Brand Extraction), Postiz AI (Content Suggestions).
-- **Backend Infrastructure**: Postiz (Self-hosted via Docker), Temporal (Workflow Engine), PostgreSQL, Redis.
+- **Database**: All extracted brand data is stored in a simple, flat `.local-db.json` file at the root of `loraloop-app/`.
+- **Assets**: All scraped images are automatically downloaded and stored in the `loraloop-app/public/brand-assets/` folder so they are available offline.
